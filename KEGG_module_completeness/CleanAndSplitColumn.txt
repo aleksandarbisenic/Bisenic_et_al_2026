@@ -1,0 +1,70 @@
+Sub CleanSplitAndNumberGenes()
+    Dim ws As Worksheet
+    Dim lastRow As Long, i As Long
+    Dim cellValue As String
+    Dim splitValues() As String
+    Dim tempSplitValues() As String
+    Dim newRow As Long
+    Dim geneCounter As Long
+    Dim tempValue As String
+    Dim tempArray() As String
+    Dim tempIndex As Long
+    Dim j As Long, k As Long
+    
+    ' Set the worksheet (modify if needed)
+    Set ws = ThisWorkbook.Sheets(1)
+    
+    ' Find the last row with data in column A (modify column reference if needed)
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    
+    ' Initialize the gene counter
+    geneCounter = 1
+    
+    ' Loop through rows from bottom to top to avoid issues with row shifting
+    For i = lastRow To 1 Step -1
+        cellValue = ws.Cells(i, 1).Value
+        
+        ' If the cell is empty, delete the row
+        If Trim(cellValue) = "" Then
+            ws.Rows(i).Delete
+        Else
+            ' Split cell values by both commas and slashes
+            If InStr(cellValue, ",") > 0 Or InStr(cellValue, "/") > 0 Then
+                ' First split by commas
+                splitValues = Split(cellValue, ",")
+                tempIndex = 0
+                
+                ' Iterate through each value from the split and further split by "/"
+                For j = LBound(splitValues) To UBound(splitValues)
+                    tempArray = Split(splitValues(j), "/")
+                    For k = LBound(tempArray) To UBound(tempArray)
+                        ReDim Preserve tempSplitValues(tempIndex)
+                        tempSplitValues(tempIndex) = Trim(tempArray(k))
+                        tempIndex = tempIndex + 1
+                    Next k
+                Next j
+                
+                ' Insert new rows for each value
+                For newRow = UBound(tempSplitValues) To 0 Step -1
+                    If newRow = 0 Then
+                        ws.Cells(i, 2).Value = tempSplitValues(newRow) ' Move KO term to column B
+                        ws.Cells(i, 1).Value = "gene" & geneCounter ' Number the gene
+                        geneCounter = geneCounter + 1
+                    Else
+                        ws.Rows(i + 1).Insert
+                        ws.Cells(i + 1, 2).Value = tempSplitValues(newRow) ' Add KO term to column B
+                        ws.Cells(i + 1, 1).Value = "gene" & geneCounter ' Number the gene
+                        geneCounter = geneCounter + 1
+                    End If
+                Next newRow
+            Else
+                ' For cells without commas or slashes, move the value to column B and number the gene
+                ws.Cells(i, 2).Value = Trim(cellValue)
+                ws.Cells(i, 1).Value = "gene" & geneCounter
+                geneCounter = geneCounter + 1
+            End If
+        End If
+    Next i
+    
+    MsgBox "Cleaning, splitting, and numbering completed!"
+End Sub
