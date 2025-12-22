@@ -1,0 +1,21 @@
+Sub FilterBP()
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+
+    ' Set the active sheet
+    Set ws = ActiveSheet
+
+    ' Find the last row in column B
+    lastRow = ws.Cells(ws.Rows.Count, 2).End(xlUp).Row
+
+    ' Loop from bottom to top to avoid shifting issues
+    For i = lastRow To 2 Step -1
+        If ws.Cells(i, 2).Value <> "BP" Then
+            ws.Rows(i).Delete
+        End If
+    Next i
+
+    MsgBox "Filtering complete. Only rows with 'BP' remain.", vbInformation, "Done"
+
+End Sub
