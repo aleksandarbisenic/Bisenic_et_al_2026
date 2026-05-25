@@ -18,7 +18,7 @@ Accessions for all genomes used in the comparative analyses (*Pilosibacter* geno
 
 If you use code from this repository, please cite:
 
-> Bisenić A, Jakovljević S, Radojević D, Mitrović H, Brdarić E, Tomić S, Dinić M, Golić N, Đokić J. \\\*Pilosibacter\\\* species emerge as highly prevalent glutamate-fueled leading contributors to butyrate synthesis via the glutarate pathway in the human gut. \\\*Gut Microbes\\\* (2026).
+> Bisenić A, Jakovljević S, Radojević D, Mitrović H, Brdarić E, Tomić S, Dinić M, Golić N, Đokić J. *Pilosibacter* species emerge as highly prevalent glutamate-fueled leading contributors to butyrate synthesis via the glutarate pathway in the human gut. *Gut Microbes* (2026).
 
-This repository is archived on Zenodo: *DOI to be added upon publication.*
+This repository is archived on Zenodo: [10.5281/zenodo.20376190](https://doi.org/10.5281/zenodo.20376190)
 
