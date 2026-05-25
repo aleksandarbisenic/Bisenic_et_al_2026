@@ -1,122 +1,184 @@
 #!/usr/bin/env python3
-# differential_go_terms_exact.py
-# Usage:
-#   python differential_go_terms_exact.py go_descriptions.txt file1.tsv file2.tsv ...
+# differential_go_terms.py
 #
-# Common options:
-#   --sep "\t"               # input sep (default: tab)
-#   --header -1              # no header (default). Use 0 if your file has a header row
-#   --col 3                  # zero-based index of GO column (default: 3 => 4th column)
-#   --split-regex "\s*[;|,]\s*"   # split multiple terms per cell; compare exact tokens
-#   --ignore-case            # make matching case-insensitive (default: case-sensitive)
-#   --collapse-spaces        # collapse internal whitespace in terms (default: on)
-#   --out go_counts_output.csv
+# PURPOSE
+#   Count (per genome) how many UNIQUE genes are annotated with each GO description
+#   listed in go_descriptions.txt, and write go_counts_output.csv.
+#
+# INPUT MODES
+#   1) Excel/CSV wide paired columns (recommended; same as Fisher_GO_input.xlsx):
+#        <Genome1 gene_id> | GO term | <Genome2 gene_id> | GO term.1 | ...
+#      Example:
+#        python differential_go_terms.py go_descriptions.txt Fisher_GO_input.xlsx
+#
+#   2) Legacy per-genome TXT/TSV files (backwards compatible with the old script):
+#      Assumes the 4th column (index 3) contains GO descriptions.
+#        python differential_go_terms.py go_descriptions.txt genome1.txt genome2.txt ...
+#
+# OUTPUT
+#   go_counts_output.csv with columns:
+#     GO Description, <genome1>, <genome2>, ...
+#
+# NOTES
+#   - Matching uses substring containment (same spirit as the original script),
+#     but with regex disabled to avoid surprises from special characters.
+#   - Counting is by UNIQUE gene_id per genome for each GO description. This matches the
+#     logic used in go_enrichment_fisher.py when building counts.
 
 import argparse
 import os
 import sys
 import re
+from typing import Dict, List, Tuple
+
 import pandas as pd
 
-def read_go_descriptions(path, ignore_case=False, collapse_spaces=True):
-    with open(path, "r", encoding="utf-8") as f:
-        lines = [ln.strip() for ln in f.readlines()]
-    # normalize
-    if collapse_spaces:
-        lines = [re.sub(r"\s+", " ", x) for x in lines]
-    if ignore_case:
-        lines = [x.lower() for x in lines]
-    # keep order, but also have a set for quick lookup
-    return lines
 
-def load_go_column(bacterial_file, sep, header, col_idx):
-    df = pd.read_csv(bacterial_file, sep=sep, header=None if header == -1 else header, dtype=str)
-    try:
-        series = df.iloc[:, col_idx].astype(str)
-    except Exception:
-        raise IndexError(f"Column index {col_idx} out of range for file: {bacterial_file}")
-    return series
+def _normalize_go_desc(s: str) -> str:
+    """Normalize GO description strings for exact matching (trim + collapse whitespace)."""
+    if s is None:
+        return ""
+    s = str(s).strip()
+    s = re.sub(r"\s+", " ", s)
+    return s
 
-def normalize_series(ser: pd.Series, ignore_case=False, collapse_spaces=True):
-    ser = ser.fillna("").astype(str).str.strip()
-    if collapse_spaces:
-        ser = ser.str.replace(r"\s+", " ", regex=True)
-    if ignore_case:
-        ser = ser.str.lower()
-    return ser
 
-def explode_if_needed(ser: pd.Series, split_regex: str | None):
-    if not split_regex:
-        # treat the entire cell as a single term
-        return ser
-    # split and explode into one-term-per-row Series
-    split = ser.str.split(split_regex, regex=True)
-    exploded = split.explode().dropna().astype(str).str.strip()
-    # drop empties caused by leading/trailing delimiters
-    exploded = exploded[exploded != ""]
-    return exploded
 
-def count_exact(go_descriptions, terms_series: pd.Series) -> dict:
-    # Pre-compute value counts for speed
-    vc = terms_series.value_counts(dropna=False)
-    # Make sure we return zeros for missing terms
-    return {desc: int(vc.get(desc, 0)) for desc in go_descriptions}
+def read_go_descriptions(file_path: str) -> List[str]:
+    """Read GO descriptions (one per line)."""
+    with open(file_path, "r", encoding="utf-8") as f:
+        return [_normalize_go_desc(line) for line in f if line.strip()]
 
-def process(go_desc_file, bacterial_files, sep, header, col_idx,
-            split_regex, ignore_case, collapse_spaces, out_path):
-    go_descriptions = read_go_descriptions(go_desc_file, ignore_case, collapse_spaces)
 
-    # Prepare output table
-    out_df = pd.DataFrame({"GO Description": go_descriptions})
+def _load_table(path: str, sheet: str | None = None) -> pd.DataFrame:
+    pl = path.lower()
+    if pl.endswith((".xlsx", ".xlsm", ".xls")):
+        return pd.read_excel(path, sheet_name=sheet or 0)
+    if pl.endswith(".csv"):
+        return pd.read_csv(path)
+    if pl.endswith(".tsv"):
+        return pd.read_csv(path, sep="\t")
+    raise ValueError(f"Unsupported input type for {path}. Use .xlsx/.xls/.csv/.tsv or legacy per-genome .txt/.tsv.")
 
-    for path in bacterial_files:
-        col = load_go_column(path, sep, header, col_idx)
-        col = normalize_series(col, ignore_case, collapse_spaces)
-        tokens = explode_if_needed(col, split_regex)
-        counts = count_exact(go_descriptions, tokens)
-        out_df[os.path.basename(path)] = out_df["GO Description"].map(counts)
 
-    out_df.to_csv(out_path, index=False)
-    print(f"[OK] Saved exact-match counts to {out_path}")
-    print(f"[OK] Files processed: {len(bacterial_files)} | Terms listed: {len(go_descriptions)}")
-    if split_regex:
-        print(f"[OK] Split regex used: {split_regex}")
+def to_long_from_wide(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert wide paired columns into long format: genome, gene_id, go_term."""
+    cols = list(df.columns)
+    rows = []
+    i = 0
 
-def parse_args():
+    # Pair strategy: <gene col>, <GO col> where GO col name starts with 'go term' (case-insensitive)
+    while i < len(cols) - 1:
+        gene_col = cols[i]
+        go_col = cols[i + 1]
+        if str(go_col).strip().lower().startswith("go term"):
+            genome = str(gene_col).strip()
+            sub = df[[gene_col, go_col]].dropna(subset=[gene_col, go_col]).copy()
+            sub.columns = ["gene_id", "go_term"]
+            sub["genome"] = genome
+            rows.append(sub[["genome", "gene_id", "go_term"]])
+            i += 2
+        else:
+            i += 1
+
+    if not rows:
+        raise ValueError(
+            "Could not parse paired columns. Expected alternating '<genome gene_id column>', 'GO term' columns."
+        )
+
+    long_df = pd.concat(rows, ignore_index=True)
+
+    # Standardize types and drop exact duplicates
+    long_df["genome"] = long_df["genome"].astype(str)
+    long_df["gene_id"] = long_df["gene_id"].astype(str)
+    long_df["go_term"] = long_df["go_term"].astype(str)
+    long_df = long_df.dropna(subset=["genome", "gene_id", "go_term"]).drop_duplicates()
+
+    return long_df
+
+
+def count_from_long(go_descriptions: List[str], long_df: pd.DataFrame) -> pd.DataFrame:
+    """Return a dataframe: GO Description x genomes with unique-gene counts."""
+    # Ensure required columns exist
+    for c in ("genome", "gene_id", "go_term"):
+        if c not in long_df.columns:
+            raise ValueError(f"Long dataframe missing required column: {c}")
+
+    # Deduplicate gene-go assignments
+    long_df = long_df.drop_duplicates(subset=["genome", "gene_id", "go_term"]).copy()
+
+    # Prepare output
+    genomes = sorted(long_df["genome"].unique().tolist())
+    out = pd.DataFrame({"GO Description": go_descriptions})
+
+    # For speed: pre-split by genome
+    by_genome = {g: long_df.loc[long_df["genome"] == g, ["gene_id", "go_term"]].copy() for g in genomes}
+
+    for g in genomes:
+        sub = by_genome[g]
+        # For each description, count unique genes with an EXACT GO-term description match
+        counts = []
+        go_series = sub["go_term"].astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
+        gene_series = sub["gene_id"].astype(str)
+
+        for desc in go_descriptions:
+            # Exact match after normalization (trim + collapse whitespace)
+            mask = go_series.eq(desc)
+            counts.append(int(gene_series[mask].nunique()))
+        out[g] = counts
+
+    return out
+
+
+def count_legacy_file(go_descriptions: List[str], bacterial_file: str) -> Dict[str, int]:
+    """Legacy mode: bacterial_file is a TSV-like file; 4th column (index 3) contains GO descriptions."""
+    df = pd.read_csv(bacterial_file, sep="\t", header=None, dtype=str)
+    if df.shape[1] <= 3:
+        raise ValueError(f"Legacy file {bacterial_file} has <4 columns; expected GO descriptions in column 4 (index 3).")
+
+    go_terms = df.iloc[:, 3].astype(str)
+    # Old script counted rows; keep that behavior for legacy files
+    go_terms_norm = go_terms.astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
+    return {desc: int((go_terms_norm == desc).sum()) for desc in go_descriptions}
+
+
+def main():
     ap = argparse.ArgumentParser(
-        description="Count GO descriptions by exact match (no substring/regex)."
+        description="Count per-genome GO-description gene counts (supports Fisher_GO_input.xlsx wide format)."
     )
-    ap.add_argument("go_descriptions", help="Text file with one GO description per line.")
-    ap.add_argument("bacterial_files", nargs="+", help="TSV/CSV files with a GO column to count from.")
-    ap.add_argument("--sep", default="\t", help="Input delimiter (default: tab)")
-    ap.add_argument("--header", type=int, default=-1,
-                    help="Header row index (default: -1 means no header). Use 0 if the first row is a header.")
-    ap.add_argument("--col", type=int, default=3,
-                    help="Zero-based index of the GO column (default: 3 => 4th column).")
-    ap.add_argument("--split-regex", default=None,
-                    help="Regex to split multiple terms per cell (e.g., '\\s*[;|,]\\s*'). If omitted, no split.")
-    ap.add_argument("--ignore-case", action="store_true",
-                    help="Case-insensitive matching (default: off).")
-    ap.add_argument("--no-collapse-spaces", action="store_true",
-                    help="Do not collapse internal whitespace (default: collapse).")
-    ap.add_argument("--out", default="go_counts_output.csv",
-                    help="Output CSV path (default: go_counts_output.csv)")
-    return ap.parse_args()
+    ap.add_argument("go_descriptions", help="Path to go_descriptions.txt (one GO description per line)")
+    ap.add_argument(
+        "inputs",
+        nargs="+",
+        help="Either a single wide Excel/CSV (e.g., Fisher_GO_input.xlsx) OR legacy per-genome TXT/TSV files",
+    )
+    ap.add_argument("--sheet", default=None, help="Excel sheet name (if Excel input). Default: first sheet.")
+    ap.add_argument("--out", default="go_counts_output.csv", help="Output CSV name (default: go_counts_output.csv)")
+    args = ap.parse_args()
+
+    go_descriptions = read_go_descriptions(args.go_descriptions)
+    if not go_descriptions:
+        sys.exit("No GO descriptions found (file was empty after stripping blank lines).")
+
+    # If they provided exactly one spreadsheet-like file => wide mode
+    if len(args.inputs) == 1 and args.inputs[0].lower().endswith((".xlsx", ".xlsm", ".xls", ".csv", ".tsv")):
+        df = _load_table(args.inputs[0], sheet=args.sheet)
+        long_df = to_long_from_wide(df)
+        out_df = count_from_long(go_descriptions, long_df)
+        out_df.to_csv(args.out, index=False)
+        print(f"[OK] Wrote {args.out} (input: {args.inputs[0]}; genomes: {out_df.shape[1]-1}).")
+        return
+
+    # Otherwise: legacy per-genome files
+    output_df = pd.DataFrame({"GO Description": go_descriptions})
+    for bacterial_file in args.inputs:
+        col_name = os.path.basename(bacterial_file)
+        counts = count_legacy_file(go_descriptions, bacterial_file)
+        output_df[col_name] = output_df["GO Description"].map(counts).astype(int)
+
+    output_df.to_csv(args.out, index=False)
+    print(f"[OK] Wrote {args.out} (legacy mode; files: {len(args.inputs)}).")
+
 
 if __name__ == "__main__":
-    args = parse_args()
-    try:
-        process(
-            go_desc_file=args.go_descriptions,
-            bacterial_files=args.bacterial_files,
-            sep=args.sep,
-            header=args.header,
-            col_idx=args.col,
-            split_regex=args.split_regex,
-            ignore_case=args.ignore_case,
-            collapse_spaces=not args.no_collapse_spaces,
-            out_path=args.out,
-        )
-    except Exception as e:
-        print(f"[ERROR] {e}", file=sys.stderr)
-        sys.exit(1)
+    main()

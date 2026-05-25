@@ -1,46 +1,83 @@
-# Protocol for COG functional category enrichment
+# COG functional category enrichment analysis
 
+This subdirectory contains the scripts and protocol for the COG functional category enrichment analysis described in §2.10.2 of Bisenić et al. (2026), corresponding to Figure 2C.
 
+## Software requirements
 
-## Input file preparation
+- Python ≥3.8
+- Python packages: `pandas`, `numpy`, `scipy`, `statsmodels`
+- Microsoft Excel, for input file preparation and assembly of the combined count table
+- GraphPad Prism v10, for the final bar plot
 
+Scripts and commands were tested on Ubuntu inside Windows (WSL2).
 
+## Files in this directory
 
-Input files for this analysis were prepared from the eggNOG-mapper annotation outputs for each bacterial genome separately. From the annotation file, columns G, H, and L were copied and pasted to a new Excel file in this order. Then the first three rows were deleted (they contain unnecessary headers). Next, using Ctrl + F, "ko:" was replaced with "" (empty space) in order to clean up the columns. Finally, the three columns generated in this way were copied and pasted to the final TXT input file called **cog_genes_input.txt**. All files for this and the next step need to exist in the same folder. 
+- `cog_analysis.py` — assigns annotated genes to COG functional categories and produces per-genome gene-count tables
+- `cog_enrichment_fisher.py` — Fisher's exact test for over-representation of COG categories in a favored group of genomes
 
+## Workflow
 
+### Step 1. Prepare per-genome COG input files
 
-## COG category gene classification
+For each genome of interest:
 
+1. Open the eggNOG-mapper annotation Excel file for the genome.
+2. Copy columns **G** (`COG_category`), **H** (`Description`), and **L** (`KEGG_ko`) — in this order — into a new Excel workbook.
+3. Delete the first three header rows.
+4. With the new sheet selected, open Find & Replace (Ctrl + H). Enter `ko:` in "Find what", leave "Replace with" empty, and click "Replace All".
+5. Save the resulting three-column table as a tab-delimited plain text file named `cog_genes_input.txt`.
 
+### Step 2. Assign genes to COG categories
 
-The table summarizing gene counts for each of the COG functional categories was also produced for each genome separately. Python script **cog_analysis.py** was executed in the same folder as **cog_genes_input.txt** generated for the genome in question:
+In the same working directory as `cog_genes_input.txt`, run:
 
+```
+python cog_analysis.py
+```
 
+The script reads `cog_genes_input.txt`, classifies each annotated gene into one or more of the standard top-level COG functional categories (genes assigned multiple COG letters are counted once per category), and writes:
 
-python cog_analysis.py 
+- `cog_enrichment_results.csv` — gene counts per COG category for the current genome.
+- `grouped_genes_by_cog.csv` — the genes themselves grouped by category, for inspection only.
 
+**Repeat steps 1 and 2 for every genome to be compared.** Because `cog_analysis.py` reads and writes hardcoded filenames, before running the script for the next genome, rename `cog_enrichment_results.csv` to a genome-specific name (for example, `cog_enrichment_NGB245.csv`) so that it is not overwritten on the next run. Replace `cog_genes_input.txt` with the next genome's input before each run.
 
+### Step 3. Assemble the combined count table
 
-This script produces two outputs: 1) **cog_enrichment_results.csv**, which contain gene counts for each COG category, and 2) **grouped_genes_by_cog.csv**, which only serve for additional overview of the genes that had been assigned to each COG category.
+Build a single Excel workbook named `cog_enrichment_input.xlsx` combining the per-genome count tables:
 
+- The first column, headed `COG Category`, contains the COG category letters (A, B, C, …, Z) in the same order they appear in the per-genome `cog_enrichment_*.csv` files. This can be copied directly from the first column of any one of those files.
+- Each subsequent column corresponds to one of the 17 analyzed genomes. The column header is the genome name, and the cell values are the gene counts copied from the `Gene Count` column of that genome's `cog_enrichment_*.csv` file.
 
+The genome names used as column headers must exactly match the names passed to `cog_enrichment_fisher.py` in step 4.
 
-These first two steps were performed for all six isolates analyzed in our study.
+### Step 4. Test for COG category enrichment
 
+Fisher's exact test for over-representation is run twice — once with the *Pilosibacter* genomes as the favored set, and once with the saccharolytic butyrogen reference genomes as the favored set. The script pools gene counts across the favored genomes and compares against the pooled gene counts across the remaining genomes, applying a one-sided Fisher's exact test (over-representation) followed by Benjamini–Hochberg correction across all COG categories.
 
+To identify COG categories enriched in *Pilosibacter*:
 
-## COG category enrichment using Fisher's over-representation test
+```
+python cog_enrichment_fisher.py cog_enrichment_input.xlsx \
+  NGB245 P_fragilis P_sp900066055 P_sp902496665 P_sp934370915 P_sp963622995 P_sp963646925
+```
 
+Rename the resulting `cog_enrichment_fisher.csv` to `cog_enrichment_pilosibacter_favored.csv` before the next run, so that it is not overwritten.
 
+To identify COG categories enriched in saccharolytic butyrogens:
 
-A summary Excel table was produced from **cog_enrichment_results.csv** files of all of the genomes to be analyzed and named **cog_enrichment_input.xlsx**. First column contained the names of all of the COG categories in the same order as in the **cog_enrichment_results.csv** file. Subsequent columns contained gene counts for each of the genomes copied from their respective **cog_enrichment_results.csv** files. An additional row was added at the top for column names. First column was named "COG Category" and the rest of the columns were named according to the preferred names for the analyzed genomes. Then, the enrichment was calculated for genomes of interest compared to the rest of the genomes in **cog_enrichment_input.xlsx** using the following command:
+```
+python cog_enrichment_fisher.py cog_enrichment_input.xlsx \
+  A_hadrus A_hallii A_rectalis C_catus C_eutactus F_prausnitzii R_hominis R_intestinalis R_inulinivorans S_variabile
+```
 
+Rename the resulting output to `cog_enrichment_saccharolytic_favored.csv`.
 
+Each output CSV lists, per COG category: contingency table entries, group totals, group proportions, the odds ratio, the raw p-value, and the BH q-value. Categories are sorted by ascending q-value (most significant first).
 
-python cog_enrichment_fisher.py cog_enrichment_input.xlsx NGB244 NGB245
+Genome accessions used for the two groups are listed in Supplementary Table 2 of Bisenić et al. (2026).
 
+### Step 5. Bar plot (Figure 2C)
 
-
-The command identifies COG categories that are enriched in the genomes of NGB244 and NGB245 compared to the remaining four genomes. COG categories are ranked by decreasing p-value and FDR. Output file is **cog_enrichment_fisher.csv**.
-
+COG categories reaching q ≤ 0.05 in either Fisher run were considered significantly enriched. For each significant category, per-genome gene counts (taken from `cog_enrichment_input.xlsx`) were normalized to gene counts per 1 Mb using the genome sizes reported in the Prokka assembly statistics for each genome. The resulting normalized values were imported into GraphPad Prism v10 to generate the bar plot shown in Figure 2C, with bars representing group means and individual data points representing per-genome values.
